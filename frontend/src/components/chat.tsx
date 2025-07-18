@@ -77,6 +77,13 @@ export function Chat() {
   const scrollToBottomRef = React.useRef<HTMLDivElement>(null);
   const historyRef = React.useRef<HTMLButtonElement>(null);
 
+  // Get the current agent type from available agents
+  const currentAgentType = React.useMemo(() => {
+    if (!selectedAgent || !availableAgents.length) return 'Regular';
+    const agent = availableAgents.find(a => a.id === selectedAgent);
+    return agent?.agent_type || 'Regular';
+  }, [selectedAgent, availableAgents]);
+
   // Use our custom hook for chat functionality - only when we have a valid agent
   const {
     messages: chatMessages,
@@ -86,7 +93,7 @@ export function Chat() {
     isLoading,
     loadSession,
     sessionId,
-  } = useChat(selectedAgent || 'default', {
+  } = useChat(selectedAgent || 'default', currentAgentType, {
     onError: (error: Error) => {
       console.error('Chat error:', error);
       setAnnouncement(`Error: ${error.message}`);
