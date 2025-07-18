@@ -220,14 +220,14 @@ async def sync_model_servers(db: AsyncSession):
             response = client.models.list()
 
             if isinstance(response, list):
-                models = [item.__dict__ for item in response]
+                model_list = [item.__dict__ for item in response]
             elif isinstance(response, dict):
-                models = response.get("data", [])
+                model_list = response.get("data", [])
             elif hasattr(response, "data"):
-                models = response.data
+                model_list = response.data
             else:
                 logger.warning(f"Unexpected response type: {type(response)}")
-                models = []
+                model_list = []
 
         except Exception as e:
             raise Exception(f"Failed to fetch models from LlamaStack: {str(e)}")
@@ -243,7 +243,7 @@ async def sync_model_servers(db: AsyncSession):
         synced_servers = []
 
         logger.debug("Processing models...")
-        for model in models:
+        for model in model_list:
             try:
                 if not model.get("name"):
                     logger.debug(f"Skipping model without name: {model}")
