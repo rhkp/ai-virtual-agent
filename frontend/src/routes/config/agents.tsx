@@ -4,10 +4,14 @@ import { ToolAssociationInfo } from '@/types';
 import { Flex, FlexItem, PageSection, Title } from '@patternfly/react-core';
 import { createFileRoute } from '@tanstack/react-router';
 
+// Add agent type enum
+export type AgentType = 'Regular' | 'ReAct';
+
 // Type def for fetching agents
 export interface Agent {
   id: string;
   name: string;
+  agent_type?: AgentType;  // Add this line (optional for now since backend doesn't have it yet)
   model_name: string;
   prompt: string;
   tools: ToolAssociationInfo[];
@@ -21,6 +25,7 @@ export interface Agent {
 // Type def for creating agents
 export interface NewAgent {
   name: string;
+  agent_type?: AgentType;
   model_name: string;
   prompt: string;
   tools: ToolAssociationInfo[];

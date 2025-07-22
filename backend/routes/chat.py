@@ -3,10 +3,18 @@ import json
 import os
 
 from llama_stack_client.lib.agents.react.tool_parser import ReActOutput
+from llama_stack_client.types import SamplingParams, UserMessage
+from llama_stack_client.types.shared.sampling_params import StrategyGreedySamplingStrategy
+from llama_stack_client.types.shared_params.response_format import JsonSchemaResponseFormat
 
 from ..agents import ExistingAgent, ExistingReActAgent
 from ..api.llamastack import client
 from ..utils.logging_config import get_logger
+from ..database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends
+from sqlalchemy.future import select
+from ..models import AgentTypeEnum, AgentType
 
 logger = get_logger(__name__)
 
@@ -49,7 +57,7 @@ class Chat:
             Agent configuration object or None if not found
         """
         try:
-            agent_config = self._get_client().agents.retrieve(agent_id=agent_id)
+            agent_config = self._get_client().agents.retrieve(agent_id=agent_id)  # type: ignore
             return agent_config
         except Exception as e:
             self.log.error(f"Error retrieving agent config for {agent_id}: {e}")
@@ -102,7 +110,7 @@ class Chat:
             self.log.error(f"Error retrieving model for agent {agent_id}: {e}")
             return "llama-3.1-8b-instruct"
 
-    def _create_agent_with_existing_id(self, agent_id: str, session_id: str):
+    def _create_agent_with_existing_id(self, agent_id: str, session_id: str, agent_type_str: str = "ReAct"):
         """Create an agent instance using an existing agent_id from LlamaStack."""
         try:
             agent_config = self._get_agent_config(agent_id)
@@ -112,21 +120,22 @@ class Chat:
             model = self._get_model_for_agent(agent_id)
             tools = self._get_tools_for_agent(agent_id)
 
-            # Determine agent type from config (default to REGULAR)
-            agent_type = AgentType.REGULAR
+            agent_type = AgentType.REACT if agent_type_str == "ReAct" else AgentType.REGULAR
 
             # Create agent instance using existing ID
             if agent_type == AgentType.REACT:
+                response_format_config = JsonSchemaResponseFormat(
+                    type="json_schema",
+                    json_schema=ReActOutput.model_json_schema()
+                )
+                
                 return ExistingReActAgent(
                     self._get_client(),
                     agent_id=agent_id,
                     model=model,
                     tools=tools,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": ReActOutput.model_json_schema(),
-                    },
-                    sampling_params={"strategy": {"type": "greedy"}, "max_tokens": 512},
+                    response_format=response_format_config,  # type: ignore
+                    sampling_params=SamplingParams(strategy=StrategyGreedySamplingStrategy(type="greedy"), max_tokens=512),
                 )
             else:
                 return ExistingAgent(
@@ -138,10 +147,7 @@ class Chat:
                         "always respond with a summary of the result."
                     ),
                     tools=tools,
-                    sampling_params={
-                        "strategy": {"type": "greedy"},
-                        "max_tokens": 512,
-                    },
+                    sampling_params=SamplingParams(strategy=StrategyGreedySamplingStrategy(type="greedy"), max_tokens=512),
                 )
         except Exception as e:
             self.log.error(f"Error creating agent with ID {agent_id}: {e}")
@@ -159,14 +165,14 @@ class Chat:
         current_step_content = ""
         final_answer = None
         tool_results = []
-
+        
         # Send session ID first to help client initialize the connection
         yield json.dumps({"type": "session", "sessionId": session_id})
 
         for response in turn_response:
             if not hasattr(response.event, "payload"):
                 error_msg = (
-                    "\n\n🚨 Llama Stack server Error: "
+                    "\n\nLlama Stack server Error: "
                     "The response received is missing an expected "
                     "`payload` attribute. This could indicate a malformed "
                     "response or an internal issue within the server.\n\n"
@@ -185,10 +191,13 @@ class Chat:
                 step_details = payload.step_details
 
                 if step_details.step_type == "inference":
-                    for chunk in self._process_inference_step_json(
-                        current_step_content, tool_results, final_answer
-                    ):
-                        yield chunk
+                    try:
+                        for chunk in self._process_inference_step_json(
+                            current_step_content, tool_results, final_answer
+                        ):
+                            yield chunk
+                    except Exception as e:
+                        yield json.dumps({"type": "error", "content": f"Processing error: {e}"})
                     current_step_content = ""
                 elif step_details.step_type == "tool_execution":
                     tool_results = self._process_tool_execution(
@@ -199,8 +208,14 @@ class Chat:
                     current_step_content = ""
 
         if not final_answer and tool_results:
+            self.log.info(f"ReAct processing complete: No final answer found, formatting {len(tool_results)} tool results")
             for chunk in self._format_tool_results_summary_json(tool_results):
                 yield chunk
+        else:
+            if final_answer:
+                self.log.info(f"ReAct processing complete: Final answer provided")
+            else:
+                self.log.info(f"ReAct processing complete: No final answer or tool results")
 
     def _process_inference_step(self, current_step_content, tool_results, final_answer):
         """Original method for backward compatibility"""
@@ -261,16 +276,18 @@ class Chat:
             if answer and answer != "null" and answer is not None:
                 yield json.dumps({"type": "text", "content": f"Final Answer: {answer}"})
 
-        except json.JSONDecodeError:
-            yield json.dumps(
-                {
-                    "type": "error",
-                    "content": (
-                        f"Failed to parse ReAct step content: "
-                        f"{current_step_content}"
-                    ),
-                }
-            )
+        except json.JSONDecodeError as e:
+            # Fallback: Treat plain text as a direct answer and wrap it in proper format
+            # This handles models that don't support structured JSON output
+            if current_step_content.strip():
+                yield json.dumps({"type": "text", "content": current_step_content.strip()})
+            else:
+                yield json.dumps(
+                    {
+                        "type": "error",
+                        "content": "Model returned empty response",
+                    }
+                )
         except Exception as e:
             yield json.dumps(
                 {
@@ -501,7 +518,7 @@ class Chat:
                     }
                 )
 
-    def stream(self, agent_id: str, session_id: str, prompt: str):
+    def stream(self, agent_id: str, session_id: str, prompt: str, agent_type_str: str = "ReAct"):
         """
         Stream chat response using LlamaStack as the single source of truth.
 
@@ -511,24 +528,24 @@ class Chat:
             prompt: The user's message
         """
         try:
-            # Create agent instance using existing agent_id
-            agent = self._create_agent_with_existing_id(agent_id, session_id)
+            # Create agent instance with agent type
+            agent = self._create_agent_with_existing_id(agent_id, session_id, agent_type_str)
             self.log.info(f"Using agent: {agent_id} with session: {session_id}")
 
             # Get existing messages from the session
             # Note: LlamaStack manages session state, so we don't need to
             # maintain local state
-            messages = [{"role": "user", "content": prompt}]
+            messages = [UserMessage(role="user", content=prompt)]
 
             # Create turn with LlamaStack
             turn_response = agent.create_turn(
                 session_id=session_id,
-                messages=messages,
+                messages=messages,  # type: ignore
                 stream=True,
             )
 
-            # Determine agent type (defaulting to REGULAR for now)
-            agent_type = AgentType.REGULAR
+            # Use passed agent type
+            agent_type = AgentType.REACT if agent_type_str == "ReAct" else AgentType.REGULAR
 
             # Stream the response
             yield from self._response_generator(turn_response, session_id, agent_type)

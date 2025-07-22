@@ -11,6 +11,12 @@ LLAMASTACK_URL = os.getenv("LLAMASTACK_URL", "http://localhost:8321")
 
 client = LlamaStackClient(
     base_url=LLAMASTACK_URL,
+    provider_data={
+        "tavily_search_api_key": os.environ.get("TAVILY_SEARCH_API_KEY", ""),
+        "fireworks_api_key": os.environ.get("FIREWORKS_API_KEY", ""),
+        "together_api_key": os.environ.get("TOGETHER_API_KEY", ""),
+        "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
+    },
 )
 
 client.agents = EnhancedAgentResource(client)

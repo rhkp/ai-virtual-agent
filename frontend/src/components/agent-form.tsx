@@ -8,6 +8,7 @@ import {
   FormHelperText,
   FormSelect,
   FormSelectOption,
+  Switch,
   TextArea,
   TextInput,
 } from '@patternfly/react-core';
@@ -47,6 +48,7 @@ interface AgentFormProps {
 // Form interface for internal form state (user-friendly)
 interface AgentFormData {
   name: string;
+  agent_type: 'Regular' | 'ReAct';
   model_name: string;
   prompt: string;
   knowledge_base_ids: string[];
@@ -58,6 +60,7 @@ const convertAgentToFormData = (agent: Agent | undefined): AgentFormData => {
   if (!agent) {
     return {
       name: '',
+      agent_type: 'ReAct',
       model_name: '',
       prompt: '',
       knowledge_base_ids: [],
@@ -70,6 +73,7 @@ const convertAgentToFormData = (agent: Agent | undefined): AgentFormData => {
 
   return {
     name: agent.name,
+    agent_type: agent.agent_type || 'ReAct',
     model_name: agent.model_name,
     prompt: agent.prompt,
     knowledge_base_ids: agent.knowledge_base_ids,
@@ -95,6 +99,7 @@ const convertFormDataToAgent = (formData: AgentFormData, tools: ToolGroup[]): Ne
 
   return {
     name: formData.name,
+    agent_type: formData.agent_type,
     model_name: formData.model_name,
     prompt: formData.prompt,
     knowledge_base_ids,
@@ -120,7 +125,6 @@ export function AgentForm({
   const form = useForm({
     defaultValues: initialAgentData,
     onSubmit: ({ value }) => {
-      console.log('Test');
       const convertedAgent = convertFormDataToAgent(value, tools);
       onSubmit(convertedAgent);
     },
@@ -249,6 +253,23 @@ export function AgentForm({
           </FormGroup>
         )}
       </form.Field>
+
+      {/* Add this new field for agent type toggle */}
+      <form.Field name="agent_type">
+        {(field) => (
+          <FormGroup label="Agent Type" fieldId="agent-type">
+            <Switch
+              id="agent-type-switch"
+              label={field.state.value === 'ReAct' ? 'ReAct Agent' : 'Regular Agent'}
+              isChecked={field.state.value === 'ReAct'}
+              onChange={(_event, checked) => {
+                field.handleChange(checked ? 'ReAct' : 'Regular');
+              }}
+            />
+          </FormGroup>
+        )}
+      </form.Field>
+
       <form.Field
         name="model_name"
         validators={{

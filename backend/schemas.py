@@ -124,6 +124,7 @@ class ToolAssociationInfo(BaseModel):
 # VirtualAssistant Schemas
 class VirtualAssistantBase(BaseModel):
     name: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default
     prompt: Optional[str] = None
     model_name: Optional[str] = None
     input_shields: Optional[List[str]] = []

@@ -357,6 +357,23 @@ class ChatRequest(BaseModel):
     sessionId: Optional[str] = None
 
 
+# Add helper function to get agent type from database
+async def get_agent_type_from_db(db: AsyncSession, agent_id: str) -> str:
+    """Get agent type from database."""
+    from sqlalchemy.future import select
+    from .. import models
+    try:
+        result = await db.execute(select(models.AgentType).where(models.AgentType.agent_id == agent_id))
+        agent_type_record = result.scalar_one_or_none()
+        if agent_type_record:
+            agent_type = agent_type_record.agent_type.value
+            return agent_type
+        else:
+            return "Regular"
+    except Exception as e:
+        return "Regular"
+
+
 @router.post("/chat")
 async def chat(
     request: ChatRequest,
@@ -420,22 +437,19 @@ async def chat(
 
         log.info(f"Using agent: {agent_id} with session: {session_id}")
 
+        # Get agent type from database
+        agent_type_str = await get_agent_type_from_db(db, agent_id)
+
         # Create stateless Chat instance (no longer needs assistant or session_state)
         chat = Chat(log)
 
         def generate_response():
             try:
-                # Get the last user message
                 if len(request.messages) > 0:
-                    last_message = request.messages[
-                        -1
-                    ]  # Get last message instead of popping
-                    # Stream response using new stateless interface
-                    for chunk in chat.stream(
-                        agent_id, session_id, last_message.content
-                    ):
-                        # Send the chunk directly since it's already
-                        # properly formatted JSON
+                    last_message = request.messages[-1]
+                    
+                    # Update this line to pass agent type
+                    for chunk in chat.stream(agent_id, session_id, last_message.content, agent_type_str):
                         yield f"data: {chunk}\n\n"
 
                 # End of stream
