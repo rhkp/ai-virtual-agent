@@ -39,6 +39,7 @@ class RoleEnum(str, enum.Enum):
 
 class UserBase(BaseModel):
     username: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default
     email: EmailStr
     role: RoleEnum
     agent_ids: Optional[List[str]] = []
@@ -61,6 +62,7 @@ class UserAgentAssignment(BaseModel):
 class MCPServerBase(BaseModel):
     toolgroup_id: str
     name: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default
     description: str = ""
     endpoint_url: str
     configuration: Dict[str, Any] = {}
@@ -76,8 +78,10 @@ class MCPServerRead(MCPServerBase):
 
 # KnowledgeBase Schemas
 class KnowledgeBaseBase(BaseModel):
-    vector_db_name: str  # LlamaStack identifier (now PK)
+    vector_db_name: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default  # LlamaStack identifier (now PK)
     name: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default
     version: str
     embedding_model: str
     provider_id: Optional[str] = None
@@ -127,6 +131,7 @@ class ToolAssociationInfo(BaseModel):
 # VirtualAssistant Schemas
 class VirtualAssistantBase(BaseModel):
     name: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default
     prompt: Optional[str] = None
     model_name: Optional[str] = None
     input_shields: Optional[List[str]] = []
@@ -166,6 +171,7 @@ class VirtualAssistantRead(VirtualAssistantBase):
 
 class GuardrailBase(BaseModel):
     name: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default
     rules: Dict[str, Any]
 
 
@@ -186,8 +192,11 @@ class GuardrailRead(GuardrailBase):
 # ModelServer Schemas (These seemed largely okay with your models.py)
 class ModelServerBase(BaseModel):
     name: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default
     provider_name: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default
     model_name: str
+    agent_type: Optional[str] = "ReAct"  # Add agent_type field with default
     endpoint_url: str
     token: Optional[str] = None
 

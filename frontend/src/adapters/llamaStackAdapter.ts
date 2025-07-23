@@ -1,6 +1,6 @@
 // Define our custom parser type
 type LlamaStackParser = {
-  parse(text: string): string | null;
+  parse(text: string, agentType?: 'Regular' | 'ReAct', tools?: string[]): string | null;
 };
 
 interface LlamaStackResponse {
@@ -21,7 +21,7 @@ interface LlamaStackResponse {
  * processes the session ID from the stream.
  */
 export const LlamaStackParser: LlamaStackParser = {
-  parse(line: string): string | null {
+  parse(line: string, agentType: 'Regular' | 'ReAct' = 'Regular', tools: string[] = []): string | null {
     // Skip [DONE] events (empty lines)
     if (!line || line === '[DONE]') {
       return null;
@@ -37,19 +37,83 @@ export const LlamaStackParser: LlamaStackParser = {
         return null;
       }
 
-      // Handle text content which should be shown to the user
+      // Handle text content - apply formatting based on actual agent type
       if (json.type === 'text' && json.content) {
-        return json.content;
+        let content = json.content;
+        
+        if (agentType === 'ReAct') {
+          // Apply ReAct-specific cleaning
+          if (content.startsWith('Final Answer: ')) {
+            content = content.replace('Final Answer: ', '');
+          }
+          content = content.replace(/\[Tool:[^\]]+\]\s*Using\s+"[^"]+"\s*tool\s*/g, '');
+          
+          // Specific handling for ReAct + No Tools combination (malformed JSON responses)
+          if (tools.length === 0) {
+            // Only try to parse if we have what looks like a complete JSON structure
+            if (content.includes('{') && content.includes('}') && content.includes('thought') && content.includes('answer')) {
+              // Try to parse structured JSON responses first
+              try {
+                const jsonContent = JSON.parse(content);
+                if (jsonContent.thought && jsonContent.answer) {
+                  return `🤔 **Thinking:** ${jsonContent.thought}\n\n${jsonContent.answer}`;
+                }
+              } catch {
+                // Handle multiple malformed JSON patterns specific to ReAct + No Tools
+                let thought = '';
+                let answer = '';
+                
+                // Pattern: { "thought":unquoted_content.", answerUnquoted_answer}
+                // Where thought content has no opening quote but has closing quote
+                let match = content.match(/{\s*"thought"\s*:([^"]*)"?\s*,\s*answer([^}]+)}/i);
+                if (match) {
+                  thought = match[1].trim();
+                  answer = match[2].trim();
+                }
+                
+                if (thought && answer) {
+                  return `🤔 **Thinking:** ${thought}\n\n${answer}`;
+                }
+              }
+            }
+          }
+          
+          // Handle duplicated content (common in ReAct responses)
+          if (content.length > 50) {
+            const half = Math.floor(content.length / 2);
+            const firstHalf = content.substring(0, half);
+            const secondHalf = content.substring(half);
+            
+            if (firstHalf === secondHalf) {
+              content = firstHalf;
+            } else {
+              const cleanFirst = firstHalf.replace(/\s+/g, ' ').trim();
+              const cleanSecond = secondHalf.replace(/\s+/g, ' ').trim();
+              if (cleanFirst === cleanSecond) {
+                content = firstHalf;
+              }
+            }
+          }
+        }
+        // For Regular agents, return content as-is (no processing)
+        
+        return content;
       }
 
-      // Handle tool use - convert to visual indication that tool is being used
+      // Handle tool use
       if (json.type === 'tool' && json.content) {
-        return `[Tool: ${json.tool?.name || 'unknown'}] ${json.content}\n`;
+        // For ReAct agents: Hide ALL tool messages (they're all internal)
+        if (agentType === 'ReAct') {
+          return null; // Hide all ReAct tool execution details
+        }
+        // For Regular agents: Show tool usage (if any)
+        const toolName = json.tool?.name || 'unknown';
+        return `🛠 **Using ${toolName}:** ${json.content}\n\n`;
       }
 
-      // Handle reasoning (thought process)
-      if (json.type === 'reasoning' && json.content) {
-        return `[Thinking: ${json.content}]\n`;
+      // Handle reasoning - only for ReAct agents
+      if (json.type === 'reasoning' && json.content && agentType === 'ReAct') {
+        return `🤔 **Thinking:** ${json.content}\n\n`;
       }
 
       // Handle errors

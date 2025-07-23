@@ -1,6 +1,7 @@
 from typing import Any, Callable, List, Optional, Tuple, Union
 
-from llama_stack_client.lib.agents.agent import AgentConfig, AsyncAgent
+from llama_stack_client import Agent
+from llama_stack_client.lib.agents.agent import AgentConfig
 from llama_stack_client.lib.agents.client_tool import ClientTool
 from llama_stack_client.lib.agents.react.agent import ReActAgent
 from llama_stack_client.lib.agents.tool_parser import ToolParser
@@ -9,8 +10,8 @@ from llama_stack_client.types.agents.turn_create_params import Toolgroup
 from llama_stack_client.types.shared_params.agent_config import ToolConfig
 
 
-class ExistingAsyncAgent(AsyncAgent):
-    """An extension of the AsyncAgent class with an existing agent_id."""
+class ExistingAgent(Agent):
+    """An extension of the Agent class with an existing agent_id."""
 
     def __init__(
         self,
@@ -39,21 +40,9 @@ class ExistingAsyncAgent(AsyncAgent):
         self.tool_parser = tool_parser
         self.sessions = []
         self.builtin_tools = {}
-        self.extra_headers = {}
 
-        # Manually set agent ID (assuming it’s safe to override)
+        # Set the agent_id directly instead of calling initialize()
         self.agent_id = agent_id
-
-    @property
-    def agent_id(self):
-        return self._agent_id
-
-    @agent_id.setter
-    def agent_id(self, value):
-        # You can add validation or other logic here
-        if not isinstance(value, str):
-            raise TypeError("agent_id must be a string")
-        self._agent_id = value
 
 
 class ExistingReActAgent(ReActAgent):
@@ -64,6 +53,7 @@ class ExistingReActAgent(ReActAgent):
         client,
         agent_id: str,
         model: Optional[str] = None,
+        instructions: Optional[str] = None,
         tools: Optional[List[Union[Toolgroup, ClientTool, Callable[..., Any]]]] = None,
         tool_config: Optional[ToolConfig] = None,
         sampling_params: Optional[SamplingParams] = None,
@@ -76,6 +66,7 @@ class ExistingReActAgent(ReActAgent):
         # Call parent's __init__ but skip the initialize() call
         self.client = client
         self.model = model
+        self.instructions = instructions
         self.tools = tools or []
         self.tool_config = tool_config
         self.sampling_params = sampling_params

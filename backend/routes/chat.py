@@ -1,16 +1,20 @@
-import asyncio
 import enum
 import json
 import os
-from typing import List
 
-from fastapi import Request
 from llama_stack_client.lib.agents.react.tool_parser import ReActOutput
-from llama_stack_client.types.shared_params.agent_config import AgentConfig, Toolgroup
+from llama_stack_client.types import SamplingParams, UserMessage
+from llama_stack_client.types.shared.sampling_params import StrategyGreedySamplingStrategy
+from llama_stack_client.types.shared_params.response_format import JsonSchemaResponseFormat
 
-from ..agents import ExistingAsyncAgent, ExistingReActAgent
-from ..api.llamastack import get_client_from_request
+from ..agents import ExistingAgent, ExistingReActAgent
+from ..api.llamastack import client
 from ..utils.logging_config import get_logger
+from ..database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends
+from sqlalchemy.future import select
+from ..models import AgentTypeEnum, AgentType
 
 logger = get_logger(__name__)
 
@@ -35,15 +39,14 @@ class Chat:
                 session_id, and prompt.
     """
 
-    def __init__(self, logger, request: Request):
+    def __init__(self, logger):
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         self.log = logger
-        self.request = request
 
     def _get_client(self):
-        return get_client_from_request(self.request)
+        return client
 
-    async def _get_agent_config(self, agent_id: str) -> AgentConfig | None:
+    def _get_agent_config(self, agent_id: str):
         """
         Retrieve agent configuration from LlamaStack.
 
@@ -54,13 +57,13 @@ class Chat:
             Agent configuration object or None if not found
         """
         try:
-            agent = await self._get_client().agents.retrieve(agent_id=agent_id)
-            return agent.agent_config
+            agent_config = self._get_client().agents.retrieve(agent_id=agent_id)  # type: ignore
+            return agent_config
         except Exception as e:
             self.log.error(f"Error retrieving agent config for {agent_id}: {e}")
             return None
 
-    async def _get_toolgroups_for_agent(self, agent_id: str) -> List[Toolgroup]:
+    def _get_tools_for_agent(self, agent_id: str):
         """
         Retrieve tools configuration for an agent from LlamaStack.
 
@@ -71,15 +74,19 @@ class Chat:
             List of tools available to the agent
         """
         try:
-            agent_config = await self._get_agent_config(agent_id)
-            if agent_config and agent_config["toolgroups"]:
-                return agent_config["toolgroups"]
+            agent_config = self._get_agent_config(agent_id)
+            if (
+                agent_config
+                and hasattr(agent_config, "tool_config")
+                and agent_config.tool_config
+            ):
+                return agent_config.tool_config.tools
             return []
         except Exception as e:
             self.log.error(f"Error retrieving tools for agent {agent_id}: {e}")
             return []
 
-    async def _get_model_for_agent(self, agent_id: str) -> str:
+    def _get_model_for_agent(self, agent_id: str):
         """
         Retrieve model configuration for an agent from LlamaStack.
 
@@ -90,11 +97,11 @@ class Chat:
             Model identifier string, defaults to llama-3.1-8b-instruct if not found
         """
         try:
-            agent_config = await self._get_agent_config(agent_id)
+            agent_config = self._get_agent_config(agent_id)
             if agent_config and hasattr(agent_config, "model"):
                 return agent_config.model
             # Fallback to default model if not found
-            models = await self._get_client().models.list()
+            models = self._get_client().models.list()
             model_list = [
                 model.identifier for model in models if model.api_model_type == "llm"
             ]
@@ -103,46 +110,45 @@ class Chat:
             self.log.error(f"Error retrieving model for agent {agent_id}: {e}")
             return "llama-3.1-8b-instruct"
 
-    async def _create_agent_with_existing_id(self, agent_id: str):
+    def _create_agent_with_existing_id(self, agent_id: str, session_id: str, agent_type_str: str = "ReAct"):
         """Create an agent instance using an existing agent_id from LlamaStack."""
         try:
-            agent_config = await self._get_agent_config(agent_id)
+            agent_config = self._get_agent_config(agent_id)
             if not agent_config:
                 raise Exception(f"Agent {agent_id} not found")
 
-            model = await self._get_model_for_agent(agent_id)
-            toolgroups = await self._get_toolgroups_for_agent(agent_id)
+            model = self._get_model_for_agent(agent_id)
+            tools = self._get_tools_for_agent(agent_id)
+            
+            # Get the standardized instructions from LlamaStack
+            instructions = None
+            if hasattr(agent_config, 'agent_config') and isinstance(agent_config.agent_config, dict):
+                instructions = agent_config.agent_config.get('instructions')
+            
+            self.log.info(f"Using instructions for agent {agent_id}: {instructions[:100] if instructions else 'None'}...")
 
-            # Determine agent type from config (default to REGULAR)
-            agent_type = AgentType.REGULAR
+            agent_type = AgentType.REACT if agent_type_str == "ReAct" else AgentType.REGULAR
 
-            # Create agent instance using existing ID
+            # Create agent instance using existing ID with proper instructions
             if agent_type == AgentType.REACT:
+                # Use standardized instructions instead of hardcoded response format
                 return ExistingReActAgent(
                     self._get_client(),
                     agent_id=agent_id,
                     model=model,
-                    tools=toolgroups,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": ReActOutput.model_json_schema(),
-                    },
-                    sampling_params={"strategy": {"type": "greedy"}, "max_tokens": 512},
+                    instructions=instructions,
+                    tools=tools,
+                    sampling_params=SamplingParams(strategy=StrategyGreedySamplingStrategy(type="greedy"), max_tokens=512),
                 )
             else:
-                return ExistingAsyncAgent(
+                # Use the standardized instructions from LlamaStack
+                return ExistingAgent(
                     self._get_client(),
                     agent_id=agent_id,
                     model=model,
-                    instructions=(
-                        "You are a helpful assistant. When you use a tool "
-                        "always respond with a summary of the result."
-                    ),
-                    tools=toolgroups,
-                    sampling_params={
-                        "strategy": {"type": "greedy"},
-                        "max_tokens": 512,
-                    },
+                    instructions=instructions,
+                    tools=tools,
+                    sampling_params=SamplingParams(strategy=StrategyGreedySamplingStrategy(type="greedy"), max_tokens=512),
                 )
         except Exception as e:
             self.log.error(f"Error creating agent with ID {agent_id}: {e}")
@@ -160,14 +166,14 @@ class Chat:
         current_step_content = ""
         final_answer = None
         tool_results = []
-
+        
         # Send session ID first to help client initialize the connection
         yield json.dumps({"type": "session", "sessionId": session_id})
 
         for response in turn_response:
             if not hasattr(response.event, "payload"):
                 error_msg = (
-                    "\n\n🚨 Llama Stack server Error: "
+                    "\n\nLlama Stack server Error: "
                     "The response received is missing an expected "
                     "`payload` attribute. This could indicate a malformed "
                     "response or an internal issue within the server.\n\n"
@@ -186,10 +192,13 @@ class Chat:
                 step_details = payload.step_details
 
                 if step_details.step_type == "inference":
-                    for chunk in self._process_inference_step_json(
-                        current_step_content, tool_results, final_answer
-                    ):
-                        yield chunk
+                    try:
+                        for chunk in self._process_inference_step_json(
+                            current_step_content, tool_results, final_answer
+                        ):
+                            yield chunk
+                    except Exception as e:
+                        yield json.dumps({"type": "error", "content": f"Processing error: {e}"})
                     current_step_content = ""
                 elif step_details.step_type == "tool_execution":
                     tool_results = self._process_tool_execution(
@@ -200,8 +209,14 @@ class Chat:
                     current_step_content = ""
 
         if not final_answer and tool_results:
+            self.log.info(f"ReAct processing complete: No final answer found, formatting {len(tool_results)} tool results")
             for chunk in self._format_tool_results_summary_json(tool_results):
                 yield chunk
+        else:
+            if final_answer:
+                self.log.info(f"ReAct processing complete: Final answer provided")
+            else:
+                self.log.info(f"ReAct processing complete: No final answer or tool results")
 
     def _process_inference_step(self, current_step_content, tool_results, final_answer):
         """Original method for backward compatibility"""
@@ -262,16 +277,18 @@ class Chat:
             if answer and answer != "null" and answer is not None:
                 yield json.dumps({"type": "text", "content": f"Final Answer: {answer}"})
 
-        except json.JSONDecodeError:
-            yield json.dumps(
-                {
-                    "type": "error",
-                    "content": (
-                        f"Failed to parse ReAct step content: "
-                        f"{current_step_content}"
-                    ),
-                }
-            )
+        except json.JSONDecodeError as e:
+            # Fallback: Treat plain text as a direct answer and wrap it in proper format
+            # This handles models that don't support structured JSON output
+            if current_step_content.strip():
+                yield json.dumps({"type": "text", "content": current_step_content.strip()})
+            else:
+                yield json.dumps(
+                    {
+                        "type": "error",
+                        "content": "Model returned empty response",
+                    }
+                )
         except Exception as e:
             yield json.dumps(
                 {
@@ -489,8 +506,7 @@ class Chat:
                             yield json.dumps(
                                 {
                                     "type": "text",
-                                    "content": "No tool_calls present in \
-                                        step_details",
+                                    "content": "No tool_calls present in step_details",
                                 }
                             )
             else:
@@ -503,7 +519,7 @@ class Chat:
                     }
                 )
 
-    def stream(self, agent_id: str, session_id: str, prompt: str):
+    def stream(self, agent_id: str, session_id: str, prompt: str, agent_type_str: str = "ReAct"):
         """
         Stream chat response using LlamaStack as the single source of truth.
 
@@ -513,32 +529,24 @@ class Chat:
             prompt: The user's message
         """
         try:
-            # Create agent instance using existing agent_id
-            agent = asyncio.run(self._create_agent_with_existing_id(agent_id))
-
+            # Create agent instance with agent type
+            agent = self._create_agent_with_existing_id(agent_id, session_id, agent_type_str)
             self.log.info(f"Using agent: {agent_id} with session: {session_id}")
 
             # Get existing messages from the session
             # Note: LlamaStack manages session state, so we don't need to
             # maintain local state
-            messages = [{"role": "user", "content": prompt}]
+            messages = [UserMessage(role="user", content=prompt)]
 
-            async def async_iterator_to_iterator():
-                # Create turn with LlamaStack
-                response = await agent.create_turn(
-                    session_id=session_id,
-                    messages=messages,
-                    stream=True,
-                )
-                result_list = []
-                async for item in response:
-                    result_list.append(item)
-                return result_list
+            # Create turn with LlamaStack
+            turn_response = agent.create_turn(
+                session_id=session_id,
+                messages=messages,  # type: ignore
+                stream=True,
+            )
 
-            turn_response = asyncio.run(async_iterator_to_iterator())
-
-            # Determine agent type (defaulting to REGULAR for now)
-            agent_type = AgentType.REGULAR
+            # Use passed agent type
+            agent_type = AgentType.REACT if agent_type_str == "ReAct" else AgentType.REGULAR
 
             # Stream the response
             yield from self._response_generator(turn_response, session_id, agent_type)
