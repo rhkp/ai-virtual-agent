@@ -4,9 +4,14 @@ import { CHAT_API_ENDPOINT } from '../config/api';
 import { fetchChatSession } from '@/services/chat-sessions';
 
 // Helper function to process stored chat messages that might contain raw JSON
-const processStoredMessage = (content: string, agentType: 'Regular' | 'ReAct' = 'Regular'): { content: string; thoughts?: string } => {
+const processStoredMessage = (content: string, agentType: 'Regular' | 'ReAct' = 'Regular', tools: string[] = []): { content: string; thoughts?: string } => {
   // Only process JSON for ReAct agents
   if (agentType === 'ReAct') {
+    // Check if this is already processed (contains thinking emoji)
+    if (content.includes('🤔 **Thinking:**')) {
+      return { content }; // Already formatted, return as-is
+    }
+    
     // Check if this is a raw ReAct JSON response
     try {
       const jsonData = JSON.parse(content);
@@ -20,13 +25,10 @@ const processStoredMessage = (content: string, agentType: 'Regular' | 'ReAct' = 
           cleanAnswer = cleanAnswer.replace('Final Answer: ', '');
         }
         
-        // Format inline like the adapter does for consistency
+        // Format like the adapter does for consistency
         const formattedContent = `🤔 **Thinking:** ${thoughts}\n\n${cleanAnswer}`;
         
-        return {
-          content: formattedContent,
-          // Don't set separate thoughts field since it's now inline
-        };
+        return { content: formattedContent };
       }
     } catch (e) {
       // Not JSON, return as-is
@@ -89,7 +91,7 @@ export function useChat(agentId: string, agentType: 'Regular' | 'ReAct' = 'Regul
             
             // Process assistant messages that might contain raw JSON
             if (msg.role === 'assistant') {
-              const processed = processStoredMessage(msg.content, agentType);
+              const processed = processStoredMessage(msg.content, agentType, []);
               processedContent = processed.content;
             }
             
@@ -208,19 +210,16 @@ export function useChat(agentId: string, agentType: 'Regular' | 'ReAct' = 'Regul
                 continue;
               }
 
-              // Parse content
+              // Parse content using proper agentType
               const parsed = LlamaStackParser.parse(data, agentType);
               if (parsed) {
                 setMessages((prev) => {
                   const updated = [...prev];
                   const lastMsg = updated[updated.length - 1];
                   if (lastMsg && lastMsg.role === 'assistant') {
-                    // Prevent adding duplicate content
+                    // Prevent duplication: only append if this content doesn't already exist
                     const trimmedParsed = parsed.trim();
-                    const currentContent = lastMsg.content.trim();
-                    
-                    // Only add if this content doesn't already exist in the message
-                    if (!currentContent.includes(trimmedParsed) && trimmedParsed.length > 0) {
+                    if (!lastMsg.content.includes(trimmedParsed) && trimmedParsed.length > 0) {
                       lastMsg.content += parsed;
                     }
                   }

@@ -44,6 +44,37 @@ def get_strategy(temperature, top_p):
     )
 
 
+def get_standardized_instructions(user_prompt: str, agent_type: str) -> str:
+    """
+    Creates standardized instructions with consistent response format based on agent type.
+
+    Args:
+        user_prompt: The user's custom prompt/instructions
+        agent_type: The type of agent ("ReAct" or "Regular")
+
+    Returns:
+        Standardized instructions with appropriate response format requirements
+    """
+    if agent_type == "ReAct":
+        # ReAct agents: Always respond with structured JSON containing thought process and answer
+        format_instruction = """
+
+IMPORTANT: You must ALWAYS respond in valid JSON format with exactly this structure:
+{
+  "thought": "Your step-by-step thinking process here",
+  "answer": "Your final answer here"
+}
+
+Think through problems step-by-step in the 'thought' field, then provide your final response in the 'answer' field."""
+    else:
+        # Regular agents: Respond naturally but consistently
+        format_instruction = """
+
+Respond naturally and conversationally. Provide clear, helpful answers."""
+    
+    return user_prompt + format_instruction
+
+
 @router.post(
     "/",
     response_model=schemas.VirtualAssistantRead,
@@ -83,9 +114,12 @@ async def create_virtual_assistant(va: schemas.VirtualAssistantCreate, db: Async
             else:
                 tools.append(tool_info.toolgroup_id)
 
+        # Create standardized instructions based on agent type
+        standardized_instructions = get_standardized_instructions(va.prompt or "", va.agent_type)
+        
         agent_config = AgentUtils.get_agent_config(
             model=va.model_name,
-            instructions=va.prompt,
+            instructions=standardized_instructions,
             tools=tools,
             sampling_params=sampling_params,
             max_infer_iters=va.max_infer_iters,

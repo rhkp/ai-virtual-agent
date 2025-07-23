@@ -119,33 +119,34 @@ class Chat:
 
             model = self._get_model_for_agent(agent_id)
             tools = self._get_tools_for_agent(agent_id)
+            
+            # Get the standardized instructions from LlamaStack
+            instructions = None
+            if hasattr(agent_config, 'agent_config') and isinstance(agent_config.agent_config, dict):
+                instructions = agent_config.agent_config.get('instructions')
+            
+            self.log.info(f"Using instructions for agent {agent_id}: {instructions[:100] if instructions else 'None'}...")
 
             agent_type = AgentType.REACT if agent_type_str == "ReAct" else AgentType.REGULAR
 
-            # Create agent instance using existing ID
+            # Create agent instance using existing ID with proper instructions
             if agent_type == AgentType.REACT:
-                response_format_config = JsonSchemaResponseFormat(
-                    type="json_schema",
-                    json_schema=ReActOutput.model_json_schema()
-                )
-                
+                # Use standardized instructions instead of hardcoded response format
                 return ExistingReActAgent(
                     self._get_client(),
                     agent_id=agent_id,
                     model=model,
+                    instructions=instructions,
                     tools=tools,
-                    response_format=response_format_config,  # type: ignore
                     sampling_params=SamplingParams(strategy=StrategyGreedySamplingStrategy(type="greedy"), max_tokens=512),
                 )
             else:
+                # Use the standardized instructions from LlamaStack
                 return ExistingAgent(
                     self._get_client(),
                     agent_id=agent_id,
                     model=model,
-                    instructions=(
-                        "You are a helpful assistant. When you use a tool "
-                        "always respond with a summary of the result."
-                    ),
+                    instructions=instructions,
                     tools=tools,
                     sampling_params=SamplingParams(strategy=StrategyGreedySamplingStrategy(type="greedy"), max_tokens=512),
                 )
